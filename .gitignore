@@ -15,6 +15,15 @@ models/trained/*.pt
 models/exports/*
 runs/
 
+# Pesos locales no utilizados por el pipeline
+weights/
+
+# Pesos locales no utilizados por el pipeline
+weights/
+
+# Pesos locales no utilizados por el pipeline
+weights/
+
 # Conjunto de datos (regenerable con scripts/generar_dataset_sintetico.py)
 data/
 
