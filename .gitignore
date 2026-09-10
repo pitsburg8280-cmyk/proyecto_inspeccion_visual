@@ -1,0 +1,39 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Pesos de modelos (regenerables ejecutando el pipeline; excluidos por tamaño)
+models/pretrained/*.pt
+models/trained/*.pt
+models/exports/*
+runs/
+
+# Conjunto de datos (regenerable con scripts/generar_dataset_sintetico.py)
+data/
+
+# Resultados generados
+results/*.json
+results/*.png
+results/figuras/
+results/inspections/
+results/validation/
+
+# Informe generado
+docs/*.docx
+
+# Habilidades de Streamlit (enlaces simbólicos específicos del entorno)
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit
+
+# Sistema operativo / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

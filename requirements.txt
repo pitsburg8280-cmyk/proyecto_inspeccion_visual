@@ -1,0 +1,33 @@
+# Proyecto: Visión Artificial para Control de Calidad
+# Aplicaciones Prácticas de IA
+# Fecha: Agosto 2026
+
+# Framework de Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Modelo YOLOv8
+ultralytics>=8.0.0
+
+# Procesamiento de Imágenes
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Ciencia de Datos y Visualización
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scikit-learn>=1.3.0
+
+# Aplicación Web
+streamlit>=1.28.0
+
+# Generación del informe (.docx)
+python-docx>=1.1.0
+
+# Utilidades
+tqdm>=4.65.0
+
+# Opcional: Dataset desde HuggingFace
+# datasets>=2.14.0
