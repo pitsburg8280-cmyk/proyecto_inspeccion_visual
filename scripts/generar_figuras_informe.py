@@ -322,10 +322,22 @@ def fig07_confusion() -> None:
 
 # ------------------------------------------------------------------ figura 8
 def fig08_curva_pr() -> None:
-    origen = RUNS_DIR / "detect" / CONFIG["run_name"] / "BoxPR_curve.png"
-    if not origen.exists():
-        origen = RESULTS_DIR / "validation" / "BoxPR_curve.png"
-    if not origen.exists():
+    """Curvas PR de la evaluación final, no las del seguimiento del entrenamiento.
+
+    Ultralytics deja un BoxPR_curve.png en la carpeta del run por cada validación
+    que ejecuta durante el entrenamiento. Esos gráficos se generan con el modelo
+    de esa época y, en las épocas tempranas, varias clases aún no producen
+    predicciones, por lo que sus paneles quedan vacíos. El informe, en cambio,
+    describe la evaluación final, cuya curva se guarda en results/validation/. Se
+    prioriza esa copia para que la figura muestre las cuatro clases y coincida con
+    las métricas de evaluation_metrics.json.
+    """
+    candidatos = (
+        RESULTS_DIR / "validation" / "BoxPR_curve.png",
+        RUNS_DIR / "detect" / CONFIG["run_name"] / "BoxPR_curve.png",
+    )
+    origen = next((ruta for ruta in candidatos if ruta.exists()), None)
+    if origen is None:
         return
     img = cv2.cvtColor(cv2.imread(str(origen)), cv2.COLOR_BGR2RGB)
 

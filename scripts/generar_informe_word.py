@@ -31,15 +31,17 @@ from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
+from docx.shared import Cm, Length, Pt, RGBColor
 
 # Permite importar el paquete `src` al ejecutar el script desde cualquier lugar.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import (  # noqa: E402
     CLASS_LABELS,
+    DOCS_DIR,
     FIGURES_DIR,
     REPORT_DOCX,
     RESULTS_DIR,
@@ -49,11 +51,47 @@ from src.config import (  # noqa: E402
 RESULTS = RESULTS_DIR
 FIGDIR = FIGURES_DIR
 SALIDA = REPORT_DOCX
+LOGOTIPO = DOCS_DIR / "assets" / "logo_ipl.png"
 
 AZUL = RGBColor(0x1F, 0x3A, 0x5F)
 GRIS = RGBColor(0x50, 0x50, 0x50)
+NEGRO = RGBColor(0x00, 0x00, 0x00)
+AZUL_ENLACE = RGBColor(0x05, 0x63, 0xC1)
 
 ETIQUETAS = CLASS_LABELS
+
+# Métricas tipográficas medidas sobre `docs/proyecto_inspeccion_visual.pdf`, el
+# documento de referencia. El PDF se compuso con un interlineado doble sobre una
+# tipografía serif de mayor altura de línea, lo que produce un paso de 32.7 pt
+# por renglón (unos 20 renglones por página). Se replican de forma exacta para
+# que el Word pagine igual que el PDF y no se pierda contenido por reflujo.
+PASO_CUERPO = Pt(32.7)
+PASO_LEYENDA = Pt(18.4)
+PASO_NOTA = Pt(13.7)
+PASO_TABLA = Pt(14.3)
+FUENTE_SANS = "Arial"
+
+# El PDF de referencia dedica una página a cada figura porque fue exportado desde
+# Google Docs, que separó las imágenes de sus pies. Con False el informe conserva
+# ese mismo contenido en menos páginas (las figuras comparten página cuando
+# caben); con True se reproduce la paginación del PDF figura por figura.
+FIGURAS_EN_PAGINA_PROPIA = False
+
+# Datos de la portada, tomados del PDF de referencia.
+PORTADA = {
+    "institucion": "Instituto Profesional de Líderes (IPL)",
+    "carrera": "Ingeniería en Inteligencia Artificial",
+    "titulo": ("Visión Artificial para el Control de Calidad e Inspección "
+               "Visual en Línea mediante YOLOv8"),
+    "autor": "Alvaro Moreno",
+    "materia": "Aplicaciones Prácticas de IA",
+    "programa": "Programa de Especialización en Inteligencia Artificial",
+    "profesor": "Raúl Figuera",
+    "anio": "2026",
+    "logo": LOGOTIPO,
+}
+
+REPOSITORIO = "https://github.com/pitsburg8280-cmyk/proyecto_inspeccion_visual.git"
 
 
 # ==============================================================================
@@ -79,33 +117,82 @@ def configurar_estilos(doc: Document) -> None:
         fuentes.set(qn(atributo), "Times New Roman")
 
     pf = normal.paragraph_format
-    pf.line_spacing = 2.0
-    pf.space_after = Pt(0)
+    pf.line_spacing = PASO_CUERPO
+    pf.space_after = Pt(6)
     pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    for nivel, tam in ((1, 14), (2, 13), (3, 12)):
+    # Los encabezados del PDF son de palo seco (sin serifa), negros y de 14/13 pt
+    # para los niveles 1 y 2; se replican aquí para que la jerarquía coincida.
+    for nivel, tam, antes, despues, paso in (
+        (1, 14, 0, 6, PASO_LEYENDA),
+        (2, 13, 6, 6, PASO_LEYENDA),
+        (3, 12, 6, 4, PASO_LEYENDA),
+    ):
         estilo = doc.styles[f"Heading {nivel}"]
-        estilo.font.name = "Times New Roman"
+        estilo.font.name = FUENTE_SANS
         estilo.font.size = Pt(tam)
         estilo.font.bold = True
-        estilo.font.color.rgb = AZUL
-        estilo.paragraph_format.space_before = Pt(14 if nivel == 1 else 10)
-        estilo.paragraph_format.space_after = Pt(6)
-        estilo.paragraph_format.line_spacing = 1.15
+        estilo.font.color.rgb = NEGRO
+        estilo.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:ascii"), FUENTE_SANS)
+        estilo.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:hAnsi"), FUENTE_SANS)
+        estilo.paragraph_format.space_before = Pt(antes)
+        estilo.paragraph_format.space_after = Pt(despues)
+        estilo.paragraph_format.line_spacing = paso
         estilo.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        estilo.paragraph_format.keep_with_next = True
 
     for nombre in ("Caption",):
         if nombre in [s.name for s in doc.styles]:
             doc.styles[nombre].font.name = "Times New Roman"
 
 
+def add_hyperlink(parrafo, url: str, texto: str, *, tamano: int | None = 12,
+                  negrita: bool = False, subrayado: bool = False) -> None:
+    """Inserta un hipervínculo externo real (CTRL + clic en Word)."""
+    r_id = parrafo.part.relate_to(url, RT.HYPERLINK, is_external=True)
+    enlace = OxmlElement("w:hyperlink")
+    enlace.set(qn("r:id"), r_id)
+    enlace.set(qn("w:history"), "1")
+
+    run = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    if tamano:
+        sz = OxmlElement("w:sz"); sz.set(qn("w:val"), str(int(tamano * 2)))
+        szcs = OxmlElement("w:szCs"); szcs.set(qn("w:val"), str(int(tamano * 2)))
+        rpr.append(sz); rpr.append(szcs)
+    if negrita:
+        rpr.append(OxmlElement("w:b"))
+    color = OxmlElement("w:color"); color.set(qn("w:val"), "0563C1")
+    rpr.append(color)
+    if subrayado:
+        sub = OxmlElement("w:u"); sub.set(qn("w:val"), "single")
+        rpr.append(sub)
+    run.append(rpr)
+
+    contenido = OxmlElement("w:t")
+    contenido.set(qn("xml:space"), "preserve")
+    contenido.text = texto
+    run.append(contenido)
+
+    enlace.append(run)
+    parrafo._p.append(enlace)
+
+
+def _aplicar_interlineado(parrafo, valor) -> None:
+    """Acepta un múltiplo (2.0) o una medida exacta (Pt(32.7))."""
+    if isinstance(valor, Length):
+        parrafo.paragraph_format.line_spacing = valor
+    else:
+        parrafo.paragraph_format.line_spacing = valor
+
+
 def p(doc: Document, texto: str = "", *, cursiva: bool = False, negrita: bool = False,
       alineacion=WD_ALIGN_PARAGRAPH.JUSTIFY, espacio_despues: float = 6,
-      interlineado: float = 2.0, tamano: int | None = None, color=None) -> docx.text.paragraph.Paragraph:
+      interlineado=PASO_CUERPO, tamano: int | None = None, color=None) -> docx.text.paragraph.Paragraph:
     parrafo = doc.add_paragraph()
     parrafo.alignment = alineacion
     parrafo.paragraph_format.space_after = Pt(espacio_despues)
-    parrafo.paragraph_format.line_spacing = interlineado
+    _aplicar_interlineado(parrafo, interlineado)
     if texto:
         run = parrafo.add_run(texto)
         run.italic = cursiva
@@ -118,14 +205,14 @@ def p(doc: Document, texto: str = "", *, cursiva: bool = False, negrita: bool = 
 
 
 def rich(doc: Document, fragmentos, *, alineacion=WD_ALIGN_PARAGRAPH.JUSTIFY,
-         espacio_despues: float = 6, interlineado: float = 2.0,
+         espacio_despues: float = 6, interlineado=PASO_CUERPO,
          sangria_izq: float | None = None,
          sangria_primera: float | None = None) -> docx.text.paragraph.Paragraph:
     """Párrafo con formato mixto: lista de (texto, cursiva, negrita)."""
     parrafo = doc.add_paragraph()
     parrafo.alignment = alineacion
     parrafo.paragraph_format.space_after = Pt(espacio_despues)
-    parrafo.paragraph_format.line_spacing = interlineado
+    _aplicar_interlineado(parrafo, interlineado)
     if sangria_izq is not None:
         parrafo.paragraph_format.left_indent = Cm(sangria_izq)
     if sangria_primera is not None:
@@ -145,10 +232,10 @@ def agregar_tabla(doc: Document, encabezados, filas, *, numero: int | None = Non
                   titulo_tabla: str = "", nota: str = "", anchos: list[float] | None = None):
     if numero is not None:
         rich(doc, [(f"Tabla {numero}", False, True)], alineacion=WD_ALIGN_PARAGRAPH.LEFT,
-             espacio_despues=2, interlineado=1.0)
+             espacio_despues=2, interlineado=PASO_LEYENDA)
     if titulo_tabla:
         rich(doc, [(titulo_tabla, True, False)], alineacion=WD_ALIGN_PARAGRAPH.LEFT,
-             espacio_despues=6, interlineado=1.0)
+             espacio_despues=6, interlineado=PASO_LEYENDA)
 
     tabla = doc.add_table(rows=1, cols=len(encabezados))
     tabla.style = "Table Grid"
@@ -159,7 +246,7 @@ def agregar_tabla(doc: Document, encabezados, filas, *, numero: int | None = Non
         celda.text = ""
         parrafo = celda.paragraphs[0]
         parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        parrafo.paragraph_format.line_spacing = 1.0
+        parrafo.paragraph_format.line_spacing = PASO_TABLA
         parrafo.paragraph_format.space_after = Pt(2)
         run = parrafo.add_run(str(texto))
         run.bold = True
@@ -172,7 +259,7 @@ def agregar_tabla(doc: Document, encabezados, filas, *, numero: int | None = Non
         for celda, valor in zip(celdas, fila):
             celda.text = ""
             parrafo = celda.paragraphs[0]
-            parrafo.paragraph_format.line_spacing = 1.0
+            parrafo.paragraph_format.line_spacing = PASO_TABLA
             parrafo.paragraph_format.space_after = Pt(2)
             parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER if _numerico(valor) else WD_ALIGN_PARAGRAPH.LEFT
             run = parrafo.add_run(str(valor))
@@ -186,7 +273,7 @@ def agregar_tabla(doc: Document, encabezados, filas, *, numero: int | None = Non
 
     if nota:
         parrafo = doc.add_paragraph()
-        parrafo.paragraph_format.line_spacing = 1.0
+        parrafo.paragraph_format.line_spacing = PASO_NOTA
         parrafo.paragraph_format.space_before = Pt(4)
         parrafo.paragraph_format.space_after = Pt(12)
         run = parrafo.add_run("Nota. ")
@@ -219,20 +306,29 @@ def agregar_figura(doc: Document, archivo: Path, numero: int, titulo_fig: str,
                    nota: str = "", ancho_cm: float = 15.5) -> bool:
     if not archivo.exists():
         return False
-    rich(doc, [(f"Figura {numero}", False, True)], alineacion=WD_ALIGN_PARAGRAPH.LEFT,
-         espacio_despues=2, interlineado=1.0)
-    rich(doc, [(titulo_fig, True, False)], alineacion=WD_ALIGN_PARAGRAPH.LEFT,
-         espacio_despues=6, interlineado=1.0)
+    etiqueta = rich(doc, [(f"Figura {numero}", False, True)],
+                    alineacion=WD_ALIGN_PARAGRAPH.LEFT,
+                    espacio_despues=2, interlineado=PASO_LEYENDA)
+    pie = rich(doc, [(titulo_fig, True, False)], alineacion=WD_ALIGN_PARAGRAPH.LEFT,
+               espacio_despues=6, interlineado=PASO_LEYENDA)
+
+    # El pie y la imagen nunca se separan: si la figura no cabe, el bloque
+    # completo pasa a la página siguiente en lugar de dejar un pie huérfano.
+    etiqueta.paragraph_format.keep_with_next = True
+    pie.paragraph_format.keep_with_next = True
+    if FIGURAS_EN_PAGINA_PROPIA:
+        etiqueta.paragraph_format.page_break_before = True
 
     parrafo = doc.add_paragraph()
     parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
     parrafo.paragraph_format.space_after = Pt(4)
     parrafo.paragraph_format.line_spacing = 1.0
+    parrafo.paragraph_format.keep_with_next = True
     parrafo.add_run().add_picture(str(archivo), width=Cm(ancho_cm))
 
     if nota:
         parrafo = doc.add_paragraph()
-        parrafo.paragraph_format.line_spacing = 1.0
+        parrafo.paragraph_format.line_spacing = PASO_NOTA
         parrafo.paragraph_format.space_after = Pt(12)
         run = parrafo.add_run("Nota. ")
         run.italic = True
@@ -327,6 +423,36 @@ class Informe:
 # ==============================================================================
 # CONSTRUCCIÓN DEL DOCUMENTO
 # ==============================================================================
+def portada(doc: Document) -> None:
+    """Portada institucional con los datos reales del PDF de referencia."""
+    if PORTADA["logo"].exists():
+        parrafo = doc.add_paragraph()
+        parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        parrafo.paragraph_format.space_after = Pt(24)
+        parrafo.paragraph_format.line_spacing = 1.0
+        parrafo.add_run().add_picture(str(PORTADA["logo"]), width=Cm(4.6))
+
+    p(doc, PORTADA["institucion"], negrita=True, alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=4, interlineado=Pt(20), tamano=13)
+    p(doc, PORTADA["carrera"], alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=54, interlineado=Pt(18), tamano=12)
+    p(doc, PORTADA["titulo"], negrita=True, alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=48, interlineado=Pt(28), tamano=20)
+    p(doc, f"Nombre: {PORTADA['autor']}", alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=6, interlineado=Pt(18), tamano=12)
+    p(doc, f"Materia: {PORTADA['materia']}", alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=6, interlineado=Pt(18), tamano=12)
+    p(doc, PORTADA["programa"], alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=36, interlineado=Pt(18), tamano=12)
+    p(doc, f"Profesor: {PORTADA['profesor']}", alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=6, interlineado=Pt(18), tamano=12)
+    p(doc, f"Institución: {PORTADA['institucion']}", alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=36, interlineado=Pt(18), tamano=12)
+    p(doc, PORTADA["anio"], negrita=True, alineacion=WD_ALIGN_PARAGRAPH.CENTER,
+      espacio_despues=0, interlineado=Pt(18), tamano=13)
+    salto_de_pagina(doc)
+
+
 def construir() -> Document:
     info = Informe()
     doc = Document()
@@ -338,16 +464,7 @@ def construir() -> Document:
     numeracion_pagina(seccion)
 
     # ------------------------------------------------------------- PORTADA
-    for _ in range(4):
-        p(doc, "", espacio_despues=0, interlineado=1.0)
-    rich(doc, [("VISIÓN ARTIFICIAL PARA EL CONTROL DE CALIDAD Y LA INSPECCIÓN "
-                "VISUAL EN LÍNEA MEDIANTE YOLOv8", False, True)],
-         alineacion=WD_ALIGN_PARAGRAPH.CENTER, espacio_despues=18, interlineado=1.5)
-    for texto in ("[Tu Nombre]", "[Tu Institución]",
-                  "Aplicaciones Prácticas de IA", "[Profesor]", "Agosto de 2026"):
-        rich(doc, [(texto, False, False)], alineacion=WD_ALIGN_PARAGRAPH.CENTER,
-             espacio_despues=4, interlineado=1.5)
-    salto_de_pagina(doc)
+    portada(doc)
 
     # -------------------------------------------------------------- RESUMEN
     titulo(doc, "Resumen", 1)
@@ -407,7 +524,7 @@ def construir() -> Document:
     ]
     for i, texto in enumerate(tablas, 1):
         rich(doc, [(f"Tabla {i}. ", False, True), (texto, False, False)],
-             espacio_despues=2, interlineado=1.5)
+             espacio_despues=2, interlineado=Pt(26.6))
 
     p(doc, "", espacio_despues=8)
     titulo(doc, "Lista de figuras", 2)
@@ -427,7 +544,7 @@ def construir() -> Document:
     ]
     for i, texto in enumerate(figuras, 1):
         rich(doc, [(f"Figura {i}. ", False, True), (texto, False, False)],
-             espacio_despues=2, interlineado=1.5)
+             espacio_despues=2, interlineado=Pt(26.6))
     salto_de_pagina(doc)
 
     contenido(doc, info)
@@ -1274,42 +1391,68 @@ def _relato_confusion(info: Informe):
 def referencias(doc: Document) -> None:
     titulo(doc, "Referencias", 1)
 
+    # Cada entrada es una lista de fragmentos (texto, cursiva[, url]). Cuando el
+    # tercer elemento existe, el fragmento se convierte en un hipervínculo real
+    # que se abre con un clic desde Word.
     refs = [
         [("Bergmann, P., Batzner, K., Fauser, M., Sattlegger, D., & Steger, C. (2021). "
           "The MVTec anomaly detection dataset: A comprehensive real-world dataset for "
           "unsupervised anomaly detection. ", False),
          ("International Journal of Computer Vision, 129", True),
-         ("(4), 1038–1059. https://doi.org/10.1007/s11263-020-01400-4", False)],
+         ("(4), 1038–1059. ", False),
+         ("https://doi.org/10.1007/s11263-020-01400-4", False,
+          "https://doi.org/10.1007/s11263-020-01400-4")],
 
         [("Bochkovskiy, A., Wang, C.-Y., & Liao, H.-Y. M. (2020). ", False),
          ("YOLOv4: Optimal speed and accuracy of object detection", True),
-         (". arXiv. https://doi.org/10.48550/arXiv.2004.10934", False)],
+         (". arXiv. ", False),
+         ("https://doi.org/10.48550/arXiv.2004.10934", False,
+          "https://doi.org/10.48550/arXiv.2004.10934")],
 
         [("Jocher, G., Chaurasia, A., & Qiu, J. (2023). ", False),
          ("Ultralytics YOLOv8", True),
-         (" (Versión 8.0) [Software de cómputo]. GitHub. "
-          "https://github.com/ultralytics/ultralytics", False)],
+         (" (Versión 8.0) [Software de cómputo]. GitHub. ", False),
+         ("https://github.com/ultralytics/ultralytics", False,
+          "https://github.com/ultralytics/ultralytics")],
 
         [("Redmon, J., & Farhadi, A. (2018). ", False),
          ("YOLOv3: An incremental improvement", True),
-         (". arXiv. https://doi.org/10.48550/arXiv.1804.02767", False)],
+         (". arXiv. ", False),
+         ("https://doi.org/10.48550/arXiv.1804.02767", False,
+          "https://doi.org/10.48550/arXiv.1804.02767")],
 
         [("Yuan, Y., Xia, Y., & Xu, G. (2025). Metal surface defect detection using "
           "SLF-YOLO enhanced YOLOv8 model. ", False),
          ("Scientific Reports, 15", True),
-         (", Artículo 94936. https://doi.org/10.1038/s41598-025-94936-9", False)],
+         (", Artículo 94936. ", False),
+         ("https://doi.org/10.1038/s41598-025-94936-9", False,
+          "https://doi.org/10.1038/s41598-025-94936-9")],
     ]
 
     for fragmentos in refs:
         parrafo = doc.add_paragraph()
         parrafo.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        parrafo.paragraph_format.line_spacing = 2.0
+        _aplicar_interlineado(parrafo, PASO_CUERPO)
         parrafo.paragraph_format.space_after = Pt(6)
         parrafo.paragraph_format.left_indent = Cm(1.27)
         parrafo.paragraph_format.first_line_indent = Cm(-1.27)
-        for texto, cursiva in fragmentos:
-            run = parrafo.add_run(texto)
-            run.italic = cursiva
+        for fragmento in fragmentos:
+            texto, cursiva = fragmento[0], fragmento[1]
+            url = fragmento[2] if len(fragmento) > 2 else None
+            if url:
+                add_hyperlink(parrafo, url, texto, tamano=12)
+            else:
+                run = parrafo.add_run(texto)
+                run.italic = cursiva
+
+    # Repositorio del proyecto, enlazado para acceso directo desde el documento.
+    p(doc, "Repositorio Github", alineacion=WD_ALIGN_PARAGRAPH.LEFT,
+      espacio_despues=6, interlineado=PASO_CUERPO)
+    parrafo = doc.add_paragraph()
+    parrafo.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _aplicar_interlineado(parrafo, PASO_CUERPO)
+    parrafo.paragraph_format.space_after = Pt(6)
+    add_hyperlink(parrafo, REPOSITORIO, REPOSITORIO, tamano=12)
 
 
 def apendices(doc: Document, info: Informe) -> None:
